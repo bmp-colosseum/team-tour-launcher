@@ -76,6 +76,8 @@ Build the three zips (needs only Node 22 or newer):
 node scripts/build-zips.mjs
 ```
 
+`npm test` runs the zipper's unit tests.
+
 Run the tests for one OS (`mac`, `windows` or `linux`):
 
 ```
