@@ -1,0 +1,164 @@
+name: ci
+# Tests the per-OS Team Tour Launcher on the real OS it ships for,
+# against a fake Balatro dir. The Windows exe is built on Linux (build-exe) and then run on
+# windows-latest, which proves a Linux-built exe works. Also checks the built zips.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-exe:
+    name: build-exe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with: { persist-credentials: false }
+      - name: Rebuild the exe from Dockerfile.build (pinned base images)
+        run: |
+          set -e
+          docker build -f windows/Dockerfile.build --output type=local,dest=out .
+          ls -l out
+          sha256sum out/*.exe "windows/dist/Team Tour Launcher.exe"
+      - name: The committed exe must be what the recipe builds
+        run: |
+          if ! cmp "out/Team Tour Launcher.exe" "windows/dist/Team Tour Launcher.exe"; then
+            echo "::error::committed exe is stale: run 'docker build -f windows/Dockerfile.build --output type=local,dest=out . && cp \"out/Team Tour Launcher.exe\" \"windows/dist/\"' and commit"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: launcher-exe
+          path: out/Team Tour Launcher.exe
+          if-no-files-found: error
+
+  scripts:
+    name: ${{ matrix.name }}
+    needs: build-exe
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macOS, os: mac, runner: macos-latest }
+          - { name: Windows, os: windows, runner: windows-latest }
+          - { name: Linux, os: linux, runner: ubuntu-latest }
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: 22 }
+
+      # ---- Windows: the Linux-built exe, run for real ----
+      - name: Windows - fetch the Linux-built exe
+        if: matrix.os == 'windows'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: launcher-exe
+          path: ${{ runner.temp }}/exe
+      - name: Windows - point the harness at the exe
+        if: matrix.os == 'windows'
+        shell: bash
+        run: echo "LAUNCHER_EXE=$RUNNER_TEMP\\exe\\Team Tour Launcher.exe" >> "$GITHUB_ENV"
+      - name: Windows - exe carries its own icon
+        if: matrix.os == 'windows'
+        shell: powershell
+        run: ./test/check-icon.ps1 -Exe $env:LAUNCHER_EXE
+
+      - name: Run the launcher against a fake Balatro dir
+        shell: bash
+        env:
+          REQUIRE_DESKTOP_VALIDATE: "1"
+        run: |
+          if [ "${{ matrix.os }}" = "linux" ]; then
+            sudo apt-get update -y && sudo apt-get install -y desktop-file-utils
+          fi
+          node test/harness.mjs ${{ matrix.os }}
+
+      - name: Build the zips
+        shell: bash
+        run: node scripts/build-zips.mjs
+
+      - name: Windows - the zipped exe still passes the harness
+        if: matrix.os == 'windows'
+        shell: powershell
+        run: |
+          $out = Join-Path $env:RUNNER_TEMP "unzipped"
+          Expand-Archive -Path dist-zips/Team-Tour-Launcher-Windows.zip -DestinationPath $out
+          Get-ChildItem $out | Format-Table Name, Length
+          $exe = Join-Path $out "Team Tour Launcher.exe"
+          if (-not (Test-Path $exe)) { throw "exe missing from the zip" }
+          $env:LAUNCHER_EXE = $exe
+          ./test/check-icon.ps1 -Exe $exe
+          node test/harness.mjs windows
+          if ($LASTEXITCODE -ne 0) { throw "harness failed on the zipped exe" }
+      - name: Windows - screenshot the GUI on the runner
+        if: matrix.os == 'windows'
+        shell: powershell
+        run: |
+          $shots = Join-Path $env:RUNNER_TEMP "shots"
+          New-Item -ItemType Directory -Force -Path $shots | Out-Null
+          $mods = Join-Path $env:RUNNER_TEMP "shotfx\Balatro\Mods\multiplayer"
+          New-Item -ItemType Directory -Force -Path $mods | Out-Null
+          Set-Content -Path (Join-Path $mods "core.lua") -Value "MP.ENV = {}"
+          $appdata = Join-Path $env:RUNNER_TEMP "shotfx"
+          ./test/capture-window.ps1 -Exe $env:LAUNCHER_EXE -AppData $appdata -Out (Join-Path $shots "launcher-public.png")
+          Set-Content -Path (Join-Path $mods ".env") -Value "server_url=mp.balatroleague.com"
+          ./test/capture-window.ps1 -Exe $env:LAUNCHER_EXE -AppData $appdata -Out (Join-Path $shots "launcher-team-tour.png")
+          # 150% display scaling cannot be set without logging off, so render the text at 1.5x instead.
+          ./test/capture-window.ps1 -Exe $env:LAUNCHER_EXE -AppData $appdata -Out (Join-Path $shots "launcher-team-tour-text150.png") -ExtraArgs "--font-scale","1.5"
+          Remove-Item (Join-Path $mods ".env")
+          ./test/capture-window.ps1 -Exe $env:LAUNCHER_EXE -AppData $appdata -Out (Join-Path $shots "launcher-public-text150.png") -ExtraArgs "--font-scale","1.5"
+      - name: Windows - upload the screenshots
+        if: matrix.os == 'windows' && always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: launcher-windows-screenshots
+          path: ${{ runner.temp }}/shots/*.png
+          if-no-files-found: warn
+
+      # ---- macOS ----
+      - name: macOS - unzip the built zip with ditto and test the real app
+        if: matrix.os == 'mac'
+        shell: bash
+        run: |
+          set -e
+          out="$RUNNER_TEMP/unzipped"
+          mkdir -p "$out"
+          ditto -x -k dist-zips/Team-Tour-Launcher-Mac.zip "$out"
+          ls -l "$out"
+          test "$(ls -d "$out"/*.app | wc -l)" -eq 1
+          for app in "$out"/*.app; do
+            plutil -lint "$app/Contents/Info.plist"
+            exe="$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
+            test -x "$exe" || { echo "not executable: $exe"; exit 1; }
+            # Unsigned on purpose: informational only, a reject is expected.
+            spctl --assess --type execute -v "$app" || echo "spctl rejected $app (expected, unsigned)"
+          done
+          icns="$out/Team Tour Launcher.app/Contents/Resources/AppIcon.icns"
+          test -f "$icns"
+          sips -g pixelWidth "$icns"
+          iconutil -c iconset "$icns" -o "$RUNNER_TEMP/AppIcon.iconset"
+          ls -l "$RUNNER_TEMP/AppIcon.iconset"
+          test -f "$RUNNER_TEMP/AppIcon.iconset/icon_128x128.png"
+          test -f "$RUNNER_TEMP/AppIcon.iconset/icon_256x256.png"
+          test -f "$RUNNER_TEMP/AppIcon.iconset/icon_512x512.png"
+          test "$(sips -g pixelWidth "$RUNNER_TEMP/AppIcon.iconset/icon_512x512.png" | awk '/pixelWidth/ {print $2}')" -eq 512
+          MAC_APPS_DIR="$out" node test/harness.mjs mac
+
+      # ---- Linux ----
+      - name: Linux - unzip, the script must be executable and ship its icon
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          set -e
+          out="$RUNNER_TEMP/unzipped"
+          mkdir -p "$out"
+          unzip -q dist-zips/Team-Tour-Launcher-Linux.zip -d "$out"
+          ls -l "$out"
+          test -x "$out/team-tour-launcher.sh"
+          test -f "$out/team-tour-launcher.png"
+          test "$(ls "$out" | wc -l)" -eq 2

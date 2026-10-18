@@ -1,0 +1,57 @@
+name: release
+# Cut a release: `git tag vX.Y.Z && git push --tags`. Builds the three zips and a SHA256SUMS file and
+# attaches them to a GitHub Release, so the Tour website can link
+# https://github.com/bmp-colosseum/team-tour-launcher/releases/latest/download/<zip>.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: 22 }
+
+      - name: Rebuild the exe from Dockerfile.build (pinned base images)
+        run: docker build -f windows/Dockerfile.build --output type=local,dest=out .
+      - name: The committed exe must be what the recipe builds
+        run: |
+          if ! cmp "out/Team Tour Launcher.exe" "windows/dist/Team Tour Launcher.exe"; then
+            echo "::error::committed exe is stale: rebuild it (see windows/README.md), commit, and re-tag"
+            exit 1
+          fi
+
+      # SIGNING (not yet): the binaries ship unsigned today. When certificates exist, signing runs
+      # here, after the build and before the zips, so the signed files are what get zipped.
+      #   Windows: Authenticode-sign "windows/dist/Team Tour Launcher.exe" with the Azure Trusted
+      #     Signing action (azure/trusted-signing-action, pinned to a commit SHA), then re-run the
+      #     stale-exe check as a plain "exe starts with MZ" check, since a signed exe no longer
+      #     matches the Docker output byte for byte.
+      #   macOS: on a macos runner, `codesign --options runtime --timestamp --deep --sign "$IDENTITY"`
+      #     the .app, `xcrun notarytool submit --wait` it (zipped with ditto), then
+      #     `xcrun stapler staple` the .app before it is zipped.
+      #   Secrets would come from the repository's encrypted secrets; none exist yet.
+
+      - name: Build the zips
+        run: node scripts/build-zips.mjs
+      - name: Checksums
+        run: |
+          cd dist-zips
+          sha256sum *.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      # softprops/action-gh-release v3.0.3
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64
+        with:
+          files: |
+            dist-zips/Team-Tour-Launcher-Mac.zip
+            dist-zips/Team-Tour-Launcher-Windows.zip
+            dist-zips/Team-Tour-Launcher-Linux.zip
+            dist-zips/SHA256SUMS
+          fail_on_unmatched_files: true
+          generate_release_notes: true
