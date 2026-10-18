@@ -320,7 +320,7 @@ if (os === "linux") {
     const dir = join(fx.root, name);
     mkdirSync(dir, { recursive: true });
     copyFileSync(LAUNCHER, join(dir, "team-tour-launcher.sh"));
-    const png = generatedEntries(join(here, "..", ".."), "linux").find((e) => e.name === "team-tour-launcher.png");
+    const png = generatedEntries(join(here, ".."), "linux").find((e) => e.name === "team-tour-launcher.png");
     writeFileSync(join(dir, "team-tour-launcher.png"), png.data);
     // The path the script sees for itself (bash's pwd), which differs from node's only on a Windows host.
     const seen = spawnSync("bash", ["-c", 'cd "$1" && pwd', "x", dir], { encoding: "utf8" }).stdout.trim();
