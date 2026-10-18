@@ -31,8 +31,7 @@ Download the zip for your system from the latest release and unzip it:
 - https://github.com/bmp-colosseum/team-tour-launcher/releases/latest/download/Team-Tour-Launcher-Windows.zip
 - https://github.com/bmp-colosseum/team-tour-launcher/releases/latest/download/Team-Tour-Launcher-Linux.zip
 
-Each release also has a `SHA256SUMS` file. The file is not signed, so your system warns you the first
-time. That is expected:
+The launcher is not signed, so your system warns you the first time. That is expected:
 
 - **Mac:** unzip, then double-click Team Tour Launcher. The first time, macOS blocks it. Go to System
   Settings > Privacy & Security, scroll down, and click Open Anyway next to the app. On macOS 14 and
@@ -48,7 +47,9 @@ Switching Multiplayer versions in the Multiplayer launcher drops the setting, an
 Open Team Tour Launcher again and switch to the Team Tour server: that rewrites the file, so it is
 fixed from then on.
 
-Unsigned binaries for now; code signing and notarization are planned.
+Unsigned binaries for now; code signing and notarization are planned. Each release also has a
+`SHA256SUMS` file if you want to check a download: `sha256sum -c SHA256SUMS` in the folder you saved
+the zip to.
 
 ## Layout
 

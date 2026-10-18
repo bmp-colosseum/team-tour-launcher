@@ -2,6 +2,9 @@ name: release
 # Cut a release: `git tag vX.Y.Z && git push --tags`. Builds the three zips and a SHA256SUMS file and
 # attaches them to a GitHub Release, so the Tour website can link
 # https://github.com/bmp-colosseum/team-tour-launcher/releases/latest/download/<zip>.
+# Tag only a commit whose ci run on main is green: this job re-checks the exe and runs the Linux
+# harness, but the Mac and Windows harness runs live in ci.yml. A manual dispatch must pick a tag
+# under "Use workflow from"; from a branch the job is skipped (a Release needs a tag).
 on:
   push:
     tags: ["v*"]
@@ -10,11 +13,12 @@ permissions:
   contents: write
 jobs:
   release:
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { persist-credentials: false }
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: 22 }
 
       - name: Rebuild the exe from Dockerfile.build (pinned base images)
@@ -36,6 +40,13 @@ jobs:
       #     the .app, `xcrun notarytool submit --wait` it (zipped with ditto), then
       #     `xcrun stapler staple` the .app before it is zipped.
       #   Secrets would come from the repository's encrypted secrets; none exist yet.
+
+      - name: Run the Linux launcher against a fake Balatro dir
+        env:
+          REQUIRE_DESKTOP_VALIDATE: "1"
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y desktop-file-utils
+          node test/harness.mjs linux
 
       - name: Build the zips
         run: node scripts/build-zips.mjs
