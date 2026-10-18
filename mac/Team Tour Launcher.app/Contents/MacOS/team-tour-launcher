@@ -1,0 +1,116 @@
+#!/bin/bash
+# Team Tour Launcher: shows which server Multiplayer is on, lets you switch it, or starts Balatro.
+# Test seams: SWITCH_CHOICE is a comma-separated script of actions (switch, play, quit), one per
+# prompt; NO_DIALOG=1 prints instead of dialogs; NO_LAUNCH=1 prints the launch command instead of
+# running it; BALATRO_GAME_DIR overrides the Steam game folder.
+B="$HOME/Library/Application Support/Balatro"
+GD="${BALATRO_GAME_DIR:-$HOME/Library/Application Support/Steam/steamapps/common/Balatro}"
+TITLE="Team Tour Launcher"
+say() {
+  if [ -n "$NO_DIALOG" ]; then
+    echo "$1"
+  else
+    osascript -e "display dialog \"$1\" buttons {\"OK\"} default button \"OK\" with title \"$TITLE\" $2" >/dev/null 2>&1
+  fi
+}
+queue="$SWITCH_CHOICE"
+scripted=""
+if [ -n "${SWITCH_CHOICE+x}" ] || [ -n "$NO_DIALOG" ]; then scripted=1; fi
+
+# A folder is the Multiplayer mod only if Multiplayer.json has the top-level id "Multiplayer" (what
+# the official Multiplayer launcher checks) AND its core.lua mentions MP.ENV, i.e. this version
+# reads a .env. The same test selects every folder we write to or delete from.
+# The JSON is read with osascript's JavaScript (ObjC Foundation), which exists on every macOS that
+# has osascript; plutil's raw extraction needs macOS 12+. Any parse error means "not Multiplayer".
+# If osascript cannot run at all, fall back to an anchored grep: the closing quote right after the
+# word means "NanoMultiplayer" cannot match (it cannot tell top level from nested keys).
+mp_id() {
+  local out
+  if out=$(osascript -l JavaScript -e 'ObjC.import("Foundation"); function run(argv) { try { var s = $.NSString.stringWithContentsOfFileEncodingError(argv[0], $.NSUTF8StringEncoding, null); if (!s) return ""; var t = ObjC.unwrap(s); if (t.charCodeAt(0) === 0xFEFF) t = t.slice(1); var d = JSON.parse(t); return (d && typeof d === "object" && !Array.isArray(d) && typeof d.id === "string") ? d.id : ""; } catch (e) { return ""; } }' "$1" 2>/dev/null); then
+    printf '%s' "$out"
+  else
+    grep -Eq '"id"[[:space:]]*:[[:space:]]*"Multiplayer"' "$1" 2>/dev/null && echo Multiplayer
+  fi
+}
+qualifies() {
+  [ -f "${1}Multiplayer.json" ] && [ "$(mp_id "${1}Multiplayer.json")" = "Multiplayer" ]     && [ -f "${1}core.lua" ] && grep -qF 'MP.ENV' "${1}core.lua"
+}
+
+scan() {
+  found=""
+  state="Public"
+  for d in "$B/Mods"/*/; do
+    if qualifies "$d"; then
+      found=1
+      [ -f "${d}.env" ] && state="Team Tour"
+    fi
+  done
+}
+
+launch() {
+  # Steam does not load mods on macOS, so start the game the way the Multiplayer launcher does.
+  if [ -f "$GD/liblovely.dylib" ]; then
+    if [ -n "$NO_LAUNCH" ]; then
+      echo "LAUNCH: cd $GD && DYLD_INSERT_LIBRARIES=$GD/liblovely.dylib $GD/Balatro.app/Contents/MacOS/love"
+    else
+      cd "$GD" && DYLD_INSERT_LIBRARIES="$GD/liblovely.dylib" nohup "$GD/Balatro.app/Contents/MacOS/love" >/dev/null 2>&1 &
+    fi
+  else
+    say "Start Balatro the way you usually do." ""
+  fi
+}
+
+scan
+if [ -z "$found" ]; then
+  say "Could not find a current Multiplayer mod. Install or update it with the Multiplayer launcher." "with icon caution"
+  exit 0
+fi
+
+while true; do
+  scan
+  # Red circle = public, green circle = Team Tour (character ids keep this file ASCII).
+  if [ "$state" = "Team Tour" ]; then
+    mark=128994; word=green; stateword="Team Tour"; other="Public"
+  else
+    mark=128308; word=red; stateword="public"; other="Team Tour"
+  fi
+  [ -n "$NO_DIALOG" ] && echo "[$word] You are on the $stateword server."
+  if [ -n "$scripted" ]; then
+    action="${queue%%,*}"
+    if [ "$queue" = "${queue#*,}" ]; then queue=""; else queue="${queue#*,}"; fi
+    [ -z "$action" ] && action="quit"
+  else
+    ans=$(osascript -e "button returned of (display dialog ((character id $mark) & \" You are on the $stateword server.\") buttons {\"Quit\",\"Switch to $other server\",\"Play Balatro\"} default button \"Play Balatro\" with title \"$TITLE\")" 2>/dev/null) || ans="Quit"
+    case "$ans" in
+      "Play Balatro") action="play" ;;
+      "Switch to "*) action="switch" ;;
+      *) action="quit" ;;
+    esac
+  fi
+  case "$action" in
+    switch)
+      if [ "$state" = "Team Tour" ]; then
+        for d in "$B/Mods"/*/; do
+          if qualifies "$d"; then rm -f "${d}.env"; fi
+        done
+        if [ -f "$B/config/Multiplayer.jkr" ]; then
+          perl -pi -e 's/mp\.balatroleague\.com/balatro.virtualized.dev/g' "$B/config/Multiplayer.jkr"
+        fi
+      else
+        for d in "$B/Mods"/*/; do
+          if qualifies "$d"; then
+            printf 'server_url=mp.balatroleague.com\nserver_port=8788\n' > "${d}.env"
+          fi
+        done
+      fi
+      ;;
+    play)
+      launch
+      exit 0
+      ;;
+    *)
+      [ -n "$NO_DIALOG" ] && echo "No change."
+      exit 0
+      ;;
+  esac
+done

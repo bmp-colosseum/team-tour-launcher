@@ -1,0 +1,10 @@
+*.bat text eol=crlf
+*.sh text eol=lf
+*.command text eol=lf
+*.plist text eol=lf
+mac/**/MacOS/* text eol=lf
+*.png binary
+*.exe binary
+*.cs text eol=lf
+*.csproj text eol=lf
+*.manifest text eol=lf

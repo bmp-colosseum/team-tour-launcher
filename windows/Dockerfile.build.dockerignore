@@ -1,0 +1,8 @@
+*
+!scripts/build-zips.mjs
+!mac/icon-source.png
+!windows/
+windows/out
+windows/dist
+windows/bin
+windows/obj

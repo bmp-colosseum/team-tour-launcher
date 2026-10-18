@@ -1,0 +1,25 @@
+# syntax=docker/dockerfile:1
+#
+# Standalone recipe for "Team Tour Launcher.exe". The exe is built here, committed at
+# windows/dist/, and zipped into the release by scripts/build-zips.mjs.
+# Rebuild (from the repo root) -- see windows/README.md:
+#   docker build -f windows/Dockerfile.build --output type=local,dest=out .
+# The build is byte-deterministic, so CI rebuilds it and fails if the committed exe differs.
+#
+# Both base images are pinned by digest. SDK 10.0 is the current LTS; it builds the net48 target
+# fine through the Microsoft.NETFramework.ReferenceAssemblies package (no Windows needed).
+
+FROM mcr.microsoft.com/dotnet/sdk:10.0@sha256:0d99ebf1ccad15037b5c98c9fe8979d6b8dbac23812feae2277a0b277b5c5ffa AS build
+# Node only renders AppIcon.ico with the same builder that makes the Mac and Linux icons.
+COPY --from=node:24-bookworm-slim@sha256:a5f4366e834695d5f363b920c104953a535d3a9864d1bdf74566a0ebe01daee5 /usr/local/bin/node /usr/local/bin/node
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+WORKDIR /src
+COPY scripts/build-zips.mjs scripts/
+COPY mac/icon-source.png mac/
+COPY windows/ windows/
+RUN node scripts/build-zips.mjs --ico windows/AppIcon.ico \
+    && dotnet publish windows/TeamTourLauncher.csproj -c Release -o /out
+
+# Only the exe is exported.
+FROM scratch AS export
+COPY --from=build ["/out/Team Tour Launcher.exe", "/Team Tour Launcher.exe"]

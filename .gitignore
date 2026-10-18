@@ -1,0 +1,6 @@
+out/
+bin/
+obj/
+dist-zips/
+AppIcon.ico
+node_modules/
